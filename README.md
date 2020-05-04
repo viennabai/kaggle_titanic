@@ -1,2 +1,3 @@
-# kaggle_titanic
-Titanic competition
+# Kaggle Competition EDA + Predictions 
+
+### 1) Titanic competition
