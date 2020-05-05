@@ -1,3 +1,5 @@
-# Kaggle Competition EDA + Predictions 
+## Kaggle Competitions 
+hosted https://www.kaggle.com/
 
-### 1) Titanic competition
+### 1) Titanic 
+Public score: top 11% 
