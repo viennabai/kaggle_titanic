@@ -1,0 +1,568 @@
+---
+title: "Comprehensive EDA - Titanic"
+output: 
+  html_document: 
+    code_folding: hide
+---
+
+
+```{r, results = 'hide', message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(RColorBrewer)
+library(scales)
+library(ggpubr)
+train <- read_csv('train.csv')
+test <- read_csv('test.csv') #test has 1 less col 
+test$Survived <- NA
+original <- rbind(train,test)
+titanic <- original
+```
+
+Let's begin by getting a glimpse at the data: 
+```{r}
+head(titanic)
+
+summary(titanic)
+```
+
+We see missing data for a few features. Let's filter them out: 
+```{r}
+#convert these variables to factors, easier to plot 
+factors <- c('Survived', 'Pclass', 'Sex', 'Cabin', 'Embarked')
+titanic[factors] <- lapply(titanic[factors], function(x) as.factor(x))
+
+#missing values to keep in mind
+titanic %>% 
+  summarize_all(~(sum(is.na(.))))
+```
+
+* Age: 263 missing - this is 20% of the dataset; too large to drop and may be too complex to set to the simple median
+* Cabin: 1014 missing - we will likely discard this variable
+* Fare: 1 missing
+* Embarked: 2 missing 
+
+
+
+**With this in mind, let's begin our variable exploration!**
+
+
+**PassengerId** - unique to each passenger   
+**Survived** - dependent variable/ targets 
+
+### **Pclass**
+
+There are three levels: 1, 2, 3
+
+***Q: How is Pclass distributed onboard?***
+
+* Majority of the passengers are in Pclass 3
+* Surprisingly, more people in Pclass 1 than 2 
+
+```{r}
+titanic %>% 
+  count(Pclass) %>% 
+  mutate(proportion = round(n/sum(n)*100)) 
+```
+
+***Q: Are there more men or women in each Pclass?***
+
+* There are more men in all Pclass. But the ratio of men to women is a lot higher in Pclass 3
+
+```{r}
+titanic %>% 
+  ggplot(aes(x=Pclass, fill=Sex)) +
+  geom_bar(position = "dodge", width = 0.4)
+```
+
+***Q: Survival rate? Were those who paid more prioritized for rescue?*** 
+
+* Yes, those in Pclass 1 had much better chances of survival
+
+```{r}
+titanic %>% 
+  filter(!is.na(Survived)) %>%  
+  ggplot(aes(x=Pclass, fill=Survived))+
+  geom_bar(position='dodge')+
+  scale_fill_brewer(palette = 'Set1')
+```
+
+### **Name**
+
+format: {LastName, Title. FirstName MiddleName} 
+
+```{r}
+head(titanic$Name)
+```
+
+Individual names are unique, but we can extract the **Title** to help identify patterns based on this variable 
+
+***Q: What is the frequency of each Title?***
+
+```{r}
+titanic$Title <- gsub('(.*, )|(\\..*)', '', titanic$Name)
+table(titanic$Sex, titanic$Title)
+```
+
+There are some Titles that are more one-off. And 'Mlle' and 'Miss' refer to the same thing. To avoid overfitting, let's consolidate these Titles into fewer groups. 
+
+```{r}
+titanic <- titanic %>% 
+  mutate(Title = case_when(Title %in% c('Master', 'Miss', 'Mr', 'Mrs') ~ Title,
+                           Title %in% c('Mlle', 'Mme', 'Ms') ~ "Miss",
+                           TRUE ~ "Other"))
+
+table(titanic$Sex, titanic$Title)
+```
+
+***Q: Survival rate based on Title?***
+
+* Women had better chances than men, they must have been prioritized for rescue
+* Men with the Title "Mr. " in their names had the worst survival rate 
+* Back the days, "Master" was used in England for boys who were too young to be    addressed as Mister; looks like children had much better chances of survival  
+
+```{r}
+titanic %>% 
+  filter(!is.na(Survived)) %>%  
+  ggplot(aes(x=Title, fill=Survived))+
+  geom_bar(position='dodge')+
+  scale_fill_brewer(palette = 'Set1')
+```
+
+### **Sex**
+
+***Q: A trans-atlantic sounds rough. Were more men than women who were making it?***
+
+* Yes, 64% of those onboard were men 
+
+```{r}
+count(titanic, Sex) %>% 
+  mutate(prop = round(n/sum(n)*100)) %>% 
+  arrange(desc(prop))
+```
+
+***Q: We already suspect that women have higher rate of survival. But what if we holding Pclass constant, was survival rate still higher for women?***
+
+* Perhaps surprisingly, yes.  
+* In Pclass 1, women survived almost with certainty; their male counterparts though, were still more likely to have died 
+* In Pclass 3, survival chances for women were almost 50/50; this sharply contrasts the much higher survival rates for those in higher classes 
+
+```{r}
+titanic %>% 
+  filter(!is.na(Survived)) %>%  
+  ggplot(aes(x=Sex, fill=Survived)) +
+  geom_bar(position='dodge') +
+  scale_fill_brewer(palette = 'Set1') + 
+  facet_wrap(~Pclass, nrow=3, scales = "free_y")
+```
+
+### **SibSp + Parch**
+Sibsp = siblings and spouses onboard
+Parch = parents and children onboard 
+They both tell us about how having family with you impacts survival. 
+Let's combine these into a new feature: **Family**
+
+***Q: Did having other family members impact your survival?***  
+
+* Seems so. If you had no family onboard, your chances of survival was worse
+* Smaller family units (2-4) had better odds of survival 
+* However, large family units (5+) did not 
+
+```{r}
+titanic$Family = titanic$SibSp + titanic$Parch + 1
+
+titanic %>% 
+  filter(!is.na(Survived)) %>%  
+  ggplot(aes(x=Family, fill=Survived)) +
+  geom_bar(position='dodge') +
+  scale_fill_brewer(palette = 'Set1')
+```
+
+### **Ticket**
+
+There were `r length(unique(titanic$PassengerId))` passengers
+with `r length(unique(titanic$Ticket))` unique tickets 
+
+Let's use Ticke to create a variable: **N_Per_Ticket**
+
+```{r}
+#Count of how many passengeres per ticket 
+n_per_ticket <- titanic %>% 
+  group_by(Ticket) %>% 
+  count() 
+
+#merge onto the main dataset 
+titanic <- merge(x=n_per_ticket, y=titanic, 
+                 by.x="Ticket", by.y="Ticket",
+                 all.x=TRUE, all.y=TRUE)
+colnames(titanic)[colnames(titanic) == "n"] <- "N_Per_Ticket"
+
+```
+
+***Q: Are people on the same ticket because they're from the same family?***
+
+* Not necessarily. There are groups traveling together (on the same ticket) when they are not "Family". And there are families who do not share the same ticket. 
+* There are 284 instances where Family != N_Per_Ticket 
+
+```{r}
+titanic %>% 
+  filter(N_Per_Ticket != Family) %>% 
+  count()
+```
+
+It is not clear what matters more: how big your family is (Sipsp+Parch), or how large your travel group is. Let's create another variable **Groups** to be the *larger* of Family and N_Per_Ticket. 
+
+```{r}
+titanic <- titanic %>% 
+  mutate(Groups = ifelse(Family > N_Per_Ticket, Family, N_Per_Ticket)) 
+
+titanic %>% 
+  filter(!is.na(Survived)) %>%  
+  ggplot(aes(x=Groups, fill=Survived)) +
+  geom_bar(position='dodge') +
+  scale_fill_brewer(palette = 'Set1')
+```
+
+The distribution is similar to what we saw for Family. Let's consolidate everyone into based on a new variable: **Group_Size**.
+
+```{r}
+titanic <- titanic %>% 
+  mutate(Group_Size = case_when(Groups == 1 ~ 1,
+                                Groups == 2 ~ 2,
+                                Groups > 2 & Groups < 5 ~ 3,
+                                Groups >= 5 ~ 4))
+
+titanic %>% 
+  filter(!is.na(Survived)) %>%  
+  ggplot(aes(x=Group_Size, fill=Survived)) +
+  geom_bar(position='dodge') +
+  scale_fill_brewer(palette = 'Set1')
+```
+
+### **Fare**
+
+**Does Fare refer to price for the passenger, or the ticket?**
+
+* for the ticket, as we can see by isolating Pclass 3: there is a linear relationship between Fare and N_Per_Ticket 
+
+```{r}
+titanic %>% 
+  filter(Pclass==3) %>% 
+  ggplot(aes(x=N_Per_Ticket, y=Fare)) + 
+  geom_jitter(color="blue", size=2, alpha=0.3)
+```
+
+This has caused outliers in Fare. For example, there are Fare in Pclass 3 that are much higher than Pclass 2. 
+
+```{r}
+titanic %>% 
+  filter(Fare<50) %>% 
+  ggplot(aes(x=Fare, y=Pclass, fill=Pclass))+
+  geom_boxplot()
+```
+
+We can combine Fare and N_Per_Person to create a new feature: **Fare_Per_Person**.   
+Let's check the distribution for Pclass 3 again. 
+
+```{r}
+titanic$Fare_Per_Person <-  titanic$Fare/titanic$N_Per_Ticket
+
+titanic %>% 
+  filter(Pclass==3) %>% 
+  ggplot(aes(x=N_Per_Ticket, y=Fare_Per_Person)) + 
+  geom_jitter(color="blue", size=2, alpha=0.3)
+
+```
+
+That looks like a more useful variable for us. We can isolate the relationship between who much you paid, and your surival rate.  
+
+Now here is something interesting - there are people who had 0 Fare. Maybe they got a free ticket. For the purposes of this analysis, we should change their Fare_Per_Ticket to median of their Pclass. 
+
+```{r}
+q1 <- quantile(filter(titanic, Pclass==1)$Fare_Per_Person)
+q2 <- quantile(filter(titanic, Pclass==2)$Fare_Per_Person)
+q3 <- quantile(filter(titanic, Pclass==3)$Fare_Per_Person, na.rm = TRUE)
+
+titanic <- titanic %>% 
+  mutate(Fare_Per_Person = case_when(Fare_Per_Person == 0 & Pclass == 1 ~ q1[3],
+                                     Fare_Per_Person == 0 & Pclass == 2 ~ q2[3], 
+                                     Fare_Per_Person == 0 & Pclass == 3 ~ q3[3],
+                                     TRUE ~ Fare_Per_Person))
+```
+
+While we're at it, let's address our missing value in Fare. One way to deal with missing values is to delete the row. But in this case, it is coming from the test set. We will have to make predictions about it.  
+
+Filtering it out, we see that this person traveled alone. We can then set his Fare_Per_Person to the median of Pclass 3. 
+
+```{r}
+filter(titanic, is.na(Fare))
+titanic$Fare_Per_Person[is.na(titanic$Fare_Per_Person)] <- q3[3]
+```
+
+There are still outliers. 
+```{r}
+titanic %>% 
+  ggplot(aes(x=Fare_Per_Person, y=Pclass, fill=Pclass))+
+  geom_boxplot()
+```
+
+Looking at this dataset, it seems that Ensemble Tree algorithms could be a good fit for it. Those are relatively immune to outliers. I think it's best to leave Fare_Per_Person as is. It is a significant improvement over the orignal Fare already.   
+
+Another thing we can do is create **Fare_Groups**. For algorithms that are sensitive to outliers, this can be a good solution. 
+
+**Q: Survival rate by Fare_Group?**  
+* we see a clearer pattern that higher fare means higher survival rate 
+```{r}
+cuts <- c(-Inf, 7, 8, 10.5, 13, 26, 39, Inf)
+labs <- c("0", "1", "2", "3", "4", "5", "6")
+titanic <- titanic %>% 
+  mutate(Fare_Groups = cut(Fare_Per_Person, breaks = cuts, labels=labs))
+titanic$Fare_Groups <- as.factor(titanic$Fare_Groups)
+
+titanic %>% 
+  filter(!is.na(Survived)) %>% 
+  ggplot(aes(x=Fare_Groups, fill=Survived)) +
+  geom_bar(position = 'dodge')+
+  scale_fill_brewer(palette = 'Set1')
+
+```
+
+### **Embarked**
+
+There are 2 missing values:  
+```{r}
+filter(titanic, is.na(Embarked))
+```
+
+These 2 share the same Ticket and Cabin. Since they're traveling together, they likely have embarked together.   
+
+**Given that they're in the Pclass 1, where are they most likely to have embarked?**    
+* At 'S'
+```{r}
+titanic %>% 
+  filter(Pclass==1 & !is.na(Embarked)) %>% 
+  count(Embarked) %>% 
+  mutate(proportion=n/sum(n))
+```
+
+**We also know that their Fare_Per_Person was 40. This is a pretty high price for Pclass 2. Does where you embark change how much you paid?**   
+* We see that given they embarked at 'C', they were more likely to have paid the higher price. But since probability of boarding at 'S' is higher, 'S' remains more likely. 
+```{r}
+titanic %>% 
+  filter(Pclass==1& (Embarked=='C' | Embarked=='S')) %>% 
+  ggplot(aes(x=Embarked, y=Fare_Per_Person, fill=Embarked))+
+  geom_boxplot() +
+  ylim(20, 60)
+
+#set NA to 'S'
+titanic$Embarked[is.na(titanic$Embarked)] <- 'S'
+```
+
+**Survival rate?**  
+* surprisingly, there does seem to be a some kind of relationship   
+``` {r}
+titanic %>% 
+  filter(!is.na(Survived)) %>% 
+  ggplot(aes(x=Embarked, fill=Survived)) +
+  geom_bar(position = 'dodge')+
+  scale_fill_brewer(palette = 'Set1')
+```
+
+### **Cabin**
+
+format: {letter+numbers} 
+
+```{r}
+head(titanic$Cabin)
+```
+
+There are `r sum(is.na(titanic$Cabin))` missing values of Cabin, or 80% of the dataset. The best way to handle this may be throwing this variable away. But first, let's try to figure out *what* information we're missing exactly.     
+
+1) values are missing b/c these people did not have cabins (this could affect survival)  
+2) values are missing b/c we do not know which cabins they had  
+
+This is a subtle distinction, let's see if we can find some additional information online.  
+https://titanic.fandom.com/wiki/Third_Class_cabins  
+https://titanic.fandom.com/wiki/First_Class_Staterooms  
+
+The most information: "steerage" (open-space dorms) did not apply to Titanic. All passengers
+were housed in cabins. There option 2 was the correct answer.  
+
+For those passengers that we have the data for, Cabin provides potentially important information about the Deck the passenger's accomodation is on. Since lower decks were flooded first as the ship sinked, this mattered. Let's extract **Deck** from Cabin. But keep in mind that this variable likely will lead to overfitting. We will have to test the models and see.   
+
+The format is {'A10'}. **Are there any that did not follow this rule?**   
+1) -- within'F', there are a few that appear different. It is likely that the 'F ' is extract, so what remains follows our normal format. 
+```{r}
+titanic %>% 
+  filter((!Pclass==1) & !is.na(Cabin) & substr(Cabin, start=1, stop=2)=='F ') %>% 
+  select(PassengerId, Sex, Age, Pclass, Cabin)
+```
+
+2) there is one entry with Deck T - which does not exist. Let's override to "Unknown". 
+```{r}
+titanic <- titanic %>% 
+  mutate(Deck = case_when(is.na(Cabin) ~ "Unknown",
+                          substr(Cabin, start=1, stop=1)=="T" ~ "Unknown",
+                          substr(Cabin, start=1, stop=2)=='F ' ~ substr(Cabin, start=3, stop=3),
+                          TRUE ~  substr(Cabin, start=1, stop=1)
+  ))
+#see the resulting variable - 
+count(titanic, Deck)
+```
+
+**Survival rate & Deck (ignore missing data)?**  
+* surprisingly, there does seem to be a some kind of relationship   
+``` {r}
+titanic %>% 
+  filter(!is.na(Survived) & Deck!='Unknown') %>% 
+  ggplot(aes(x=Embarked, fill=Survived)) +
+  geom_bar(position = 'dodge')+
+  scale_fill_brewer(palette = 'Set1')
+```
+
+### **Age**
+There are `r sum(is.na(titanic$Age))` missing values of Cabin, or 20% of the dataset. This information is potentally impactful, so we should do our best to replace it. The median age of the dataset is `r median(titanic$Age, na.rm=TRUE)`.   
+
+Our Title variable perhaps can help. Miss vs Mrs, and Mr vs Master, they have an age component to it. We also can guess that older people can afford to be in better Pclass. Let's use these two variables, and assign missing Age to the median of these groups. 
+```{r}
+
+#lookup table 
+
+lookup <- titanic %>% 
+  group_by(Pclass, Title) %>% 
+  summarize(med_age = median(Age, na.rm=TRUE))
+
+#rows with missing ages 
+missing_ages <- titanic %>% filter(is.na(Age))
+
+#merge the two 
+temp <- merge(x=missing_ages, y=lookup,
+              by = c('Pclass', 'Title'),
+              all.x=TRUE) 
+temp <- temp %>% select(PassengerId, med_age)
+titanic <- merge(x=titanic, y=temp,
+                 by = 'PassengerId',
+                 all.x=TRUE)
+
+#add med_age to original dataset
+titanic <- titanic %>% 
+  mutate(med_age = case_when(is.na(med_age) ~ Age,
+                             TRUE ~ med_age))
+
+#confirm that Age and our best guesses share the same median 
+titanic %>%
+  group_by(Pclass, Title) %>%
+  summarize(n =n(),
+            missing= sum(is.na(Age)),
+            prop_missing = round(missing/n*100),
+            age = median(Age, na.rm=TRUE),
+            new = median(med_age, na.rm=TRUE))
+
+#replace Age
+titanic$Age <- titanic$med_age
+
+```
+
+Given that we replaced 20% of the Age data, and there are still outliers, perhaps bucketing Age could be useful. 
+```{r}
+titanic <- titanic %>% 
+  mutate(Age_Group = case_when(Age < 16 ~ "0-15",
+                               Age >= 16 & Age < 20 ~ "16-19",
+                               Age >= 20 & Age < 24 ~ "20-23",
+                               Age >= 24 & Age < 30 ~ "24-29",
+                               Age >= 30 & Age < 40 ~ "30-39",
+                               Age >= 40 & Age < 55 ~ "40-54",
+                               Age >= 55 ~ "55+"))
+titanic %>% count(Age_Group)
+titanic$Age_Group <- as.factor(titanic$Age_Group)
+
+# titanic %>% 
+#   filter(!is.na(Survived)) %>% 
+#   ggplot(aes(x = Age_Group, fill=Survived))+
+#   geom_bar(position='dodge')+
+```
+
+**Survival rate by Age?**  
+* the group with the best survival rate were children 15 and under
+* the worst were people in their 20s 
+* surprisingly, people 55+ were not really better off; given that they seemed to should have been prioritized in the rescue 
+
+```{r}
+titanic %>% 
+  filter(!is.na(Survived)) %>% 
+  ggplot(aes(x = Age_Group, fill=Survived))+
+  geom_bar(position='dodge')
+```
+
+
+### **Fate**
+**Did the fate of other people in your group impact your survival?** 'group' here means those who were on the same ticket as you. Identifying family members based on last name were difficult, and I have decided to use ticket for simplicity. If this variable appears to be important after running feature_importance_ on models, we can return to do more work on it. 
+
+**Who are your companions?**
+
+``` {r}
+Companions <- titanic %>%
+  group_by(Ticket) %>%
+  summarize(n = n(),
+            Died = sum(Survived==0, na.rm = T),
+            Lived = sum(Survived==1, na.rm = T),
+            Known_Fate = Died + Lived) %>% 
+  arrange(desc(n))
+Companions
+```
+
+For example: Ticket CA. 2343  
+* there are 11 people who share this ticket  
+* of those, we know the fate of 7 (the other 5 are in the test set)  
+* of those 7, all of them died  
+* could this mean that the rest suffered the same fate?   
+
+Let's go through and add a **Fate** variable to our dataset. For each passenger, if she is in the train test set, we should ignore her own fate. Since that would mean using the dependent variable to engineer an independent variable.  
+
+There are 3 levels.  
+* 0.5 = default 
+* 1 = better fate (other people in your group, when fate is known, more often lived)
+* 0 = worse fate (other people in your group, when fate is known, more often died)
+
+**Survival rate based on fate?**
+* as expected, if other members of your group surived, your chances were higher as well 
+``` {r}
+full <- merge(x=titanic, y=Companions,
+              by.x="Ticket", by.y="Ticket",
+              all.x=TRUE, all.y=TRUE)
+full$Fate <- NA
+
+trainfate <- full %>% 
+  filter(!is.na(Survived)) %>% 
+  mutate(Known_Fate = Known_Fate-1,
+         Fate = case_when(Known_Fate==0 ~ 0.5,
+                          n==1 ~ 0.5,
+                          n>1 & Survived==1 ~ (Lived-1)/Known_Fate,
+                          n>1 & Survived==0 ~ Lived/Known_Fate)) 
+testfate <- full %>% 
+  filter(is.na(Survived)) %>% 
+  mutate(Fate = case_when(Known_Fate==0 ~ 0.5,
+                          n==1 ~ 0.5,
+                          n>1 ~ Lived/Known_Fate)) 
+
+full <- rbind(trainfate, testfate)
+full <- full %>% arrange(PassengerId)
+
+full <- full %>% 
+  mutate(Fate = case_when(Fate < 0.5 ~ 0,
+                          Fate > 0.5 ~ 1,
+                          TRUE ~ Fate))
+
+titanic$Fate <- as.factor(full$Fate)
+
+titanic %>% 
+  filter(!is.na(Survived)) %>% 
+  ggplot(aes(x=Fate, fill=Survived))+
+  geom_bar(position='dodge')
+
+```
+
+
+### This includes our EDA! 
+
