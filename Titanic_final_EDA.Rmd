@@ -1,3 +1,8 @@
+## Please see HTML here: 
+https://rpubs.com/viennabai/609430 
+(enable code at the top right corner to display all code)
+
+
 ---
 title: "Comprehensive EDA - Titanic"
 output: 
